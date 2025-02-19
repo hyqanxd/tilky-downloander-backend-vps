@@ -1,13 +1,23 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import youtubedl from 'youtube-dl-exec';
 import instagramGetUrl from 'instagram-url-direct';
-import path from 'path';
-import fs from 'fs';
+import * as path from 'path';
+import * as fs from 'fs';
 import ffmpeg from 'ffmpeg-static';
 import axios from 'axios';
 import fluentFfmpeg from 'fluent-ffmpeg';
+
+interface DownloadRequest {
+  url: string;
+  format: 'audio' | 'video';
+}
+
+interface ProgressEvent {
+  total?: number;
+  loaded?: number;
+}
 
 dotenv.config();
 
@@ -34,7 +44,7 @@ function generateFileName(extension: string): string {
 }
 
 // Instagram video indirme endpoint'i
-app.post('/api/download/instagram', async (req, res) => {
+app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>, res: Response) => {
   const timestampDir = path.join(__dirname, '../downloads', Date.now().toString());
   
   try {
@@ -112,13 +122,13 @@ app.post('/api/download/instagram', async (req, res) => {
     res.end();
 
     // İndirme tamamlandıktan sonra dosyayı gönder
-    app.get(`/api/download/${fileName}`, (req, res) => {
-      res.download(filePath, fileName, (err) => {
+    app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
+      res.download(filePath, fileName, (err: Error | null) => {
         if (err) {
           console.error('Dosya gönderme hatası:', err);
         }
         // İndirme tamamlandıktan sonra temizlik yap
-        fs.rm(timestampDir, { recursive: true, force: true }, (rmErr) => {
+        fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
           if (rmErr) {
             console.error('Dizin silme hatası:', rmErr);
           }
@@ -135,7 +145,7 @@ app.post('/api/download/instagram', async (req, res) => {
 });
 
 // YouTube video indirme endpoint'i
-app.post('/api/download/youtube', async (req, res) => {
+app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, res: Response) => {
   const timestampDir = path.join(__dirname, '../downloads', Date.now().toString());
   
   try {
@@ -216,13 +226,13 @@ app.post('/api/download/youtube', async (req, res) => {
     res.end();
 
     // İndirme tamamlandıktan sonra dosyayı gönder
-    app.get(`/api/download/${fileName}`, (req, res) => {
-      res.download(outputPath, fileName, (err) => {
+    app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
+      res.download(outputPath, fileName, (err: Error | null) => {
         if (err) {
           console.error('Dosya gönderme hatası:', err);
         }
         // İndirme tamamlandıktan sonra temizlik yap
-        fs.rm(timestampDir, { recursive: true, force: true }, (rmErr) => {
+        fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
           if (rmErr) {
             console.error('Dizin silme hatası:', rmErr);
           }
