@@ -1,12 +1,14 @@
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
-import youtubedl from 'youtube-dl-exec';
-import instagramGetUrl from 'instagram-url-direct';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs';
 import ffmpeg from 'ffmpeg-static';
 import axios from 'axios';
 import fluentFfmpeg from 'fluent-ffmpeg';
+
+const execAsync = promisify(exec);
 
 interface DownloadRequest {
   url: string;
@@ -61,47 +63,54 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
     const fileName = generateFileName(format === 'audio' ? 'mp3' : 'mp4');
     const outputPath = path.join(timestampDir, fileName);
 
-    // youtube-dl ile Instagram videosu indirme
-    const options = format === 'audio' ? {
-      output: outputPath,
-      extractAudio: true,
-      audioFormat: 'mp3',
-      audioQuality: 0,
-      addMetadata: true,
-      noCheckCertificate: true,
-      quiet: false,
-      progress: true,
-      ...(ffmpeg ? { ffmpegLocation: ffmpeg } : {})
-    } : {
-      output: outputPath,
-      format: 'best[ext=mp4]/best',
-      addMetadata: true,
-      noCheckCertificate: true,
-      quiet: false,
-      progress: true,
-      ...(ffmpeg ? { ffmpegLocation: ffmpeg } : {})
-    };
+    // yt-dlp komutunu oluştur
+    let command = `yt-dlp "${url}" `;
+    
+    if (format === 'audio') {
+      command += `-x --audio-format mp3 --audio-quality 0 `;
+      if (ffmpeg) {
+        command += `--ffmpeg-location "${ffmpeg}" `;
+      }
+    } else {
+      command += `-f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" `;
+    }
 
-    // İndirme işlemini başlat
-    const download = youtubedl.exec(url, options);
+    command += `--no-warnings --no-check-certificates `;
+    command += `-o "${outputPath}" `;
+    command += `--progress-template "download:%(progress.downloaded_bytes)s/%(progress.total_bytes)s"`;
+
     let lastProgress = 0;
+    const downloadProcess = exec(command);
 
-    // İlerleme durumunu izle
-    if (download.stdout) {
-      download.stdout.on('data', (data: Buffer) => {
-        const output = data.toString();
-        const progressMatch = output.match(/(\d+\.\d+)%/);
-        if (progressMatch) {
-          const progress = parseFloat(progressMatch[1]);
-          if (progress > lastProgress) {
-            lastProgress = progress;
-            res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
+    if (downloadProcess.stdout) {
+      downloadProcess.stdout.on('data', (data: Buffer) => {
+        try {
+          const output = data.toString();
+          const match = output.match(/download:(\d+)\/(\d+)/);
+          if (match) {
+            const [, downloaded, total] = match;
+            const progress = Math.round((parseInt(downloaded) / parseInt(total)) * 100);
+            if (progress > lastProgress) {
+              lastProgress = progress;
+              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
+            }
           }
+        } catch (err) {
+          // İlerleme bilgisi işlenemezse sessizce devam et
         }
       });
     }
 
-    await download;
+    await new Promise<void>((resolve, reject) => {
+      downloadProcess.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`İndirme işlemi başarısız oldu (kod: ${code})`));
+        }
+      });
+      downloadProcess.on('error', reject);
+    });
 
     if (!fs.existsSync(outputPath)) {
       throw new Error('İndirilen dosya bulunamadı');
@@ -131,9 +140,6 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
     let errorMessage = 'Video indirilemedi';
     if (error instanceof Error) {
       errorMessage = error.message;
-    } else if (typeof error === 'object' && error && 'response' in error) {
-      const axiosError = error as any;
-      errorMessage = `Instagram API Hatası: ${axiosError.response?.status} - ${axiosError.response?.statusText}`;
     }
     
     res.status(500).json({ error: errorMessage });
