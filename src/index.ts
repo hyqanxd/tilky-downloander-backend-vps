@@ -58,55 +58,71 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
       fs.mkdirSync(timestampDir, { recursive: true });
     }
 
-    // Instagram API isteği için özel headers
-    const headers = {
-      'User-Agent': 'Instagram 219.0.0.12.117 Android',
-      'Accept': '*/*',
-      'Accept-Language': 'en-US',
-      'Accept-Encoding': 'gzip, deflate',
-      'Connection': 'keep-alive',
-      'X-IG-Capabilities': '3brTvw==',
-      'X-IG-Connection-Type': 'WIFI',
-      'X-IG-Connection-Speed': '1432kbps',
-      'X-IG-Bandwidth-Speed-KBPS': '-1.000',
-      'X-IG-Bandwidth-TotalBytes-B': '0',
-      'X-IG-Bandwidth-TotalTime-MS': '0',
-      'X-FB-HTTP-Engine': 'Liger',
-      'X-FB-Client-IP': 'True',
-      'X-FB-Server-Cluster': 'True'
+    const fileName = generateFileName(format === 'audio' ? 'mp3' : 'mp4');
+    const outputPath = path.join(timestampDir, fileName);
+
+    // youtube-dl ile Instagram videosu indirme
+    const options = format === 'audio' ? {
+      output: outputPath,
+      extractAudio: true,
+      audioFormat: 'mp3',
+      audioQuality: 0,
+      addMetadata: true,
+      noCheckCertificate: true,
+      quiet: false,
+      progress: true,
+      ...(ffmpeg ? { ffmpegLocation: ffmpeg } : {})
+    } : {
+      output: outputPath,
+      format: 'best[ext=mp4]/best',
+      addMetadata: true,
+      noCheckCertificate: true,
+      quiet: false,
+      progress: true,
+      ...(ffmpeg ? { ffmpegLocation: ffmpeg } : {})
     };
 
-    try {
-      // İlk deneme: instagram-url-direct ile
-      const result = await instagramGetUrl(url);
-      if (result && result.url_list && result.url_list.length > 0) {
-        const videoUrl = result.url_list[0];
-        await downloadAndProcess(videoUrl, format, timestampDir, res);
-      } else {
-        throw new Error('Video URL bulunamadı - Yöntem 1');
-      }
-    } catch (error1) {
-      try {
-        // İkinci deneme: Doğrudan Instagram API'si ile
-        const postId = url.split('/p/')[1]?.split('/')[0];
-        if (!postId) {
-          throw new Error('Geçersiz Instagram URL\'si');
-        }
+    // İndirme işlemini başlat
+    const download = youtubedl.exec(url, options);
+    let lastProgress = 0;
 
-        const apiUrl = `https://www.instagram.com/p/${postId}/?__a=1`;
-        const response = await axios.get(apiUrl, { headers });
-        
-        if (response.data && response.data.graphql && response.data.graphql.shortcode_media) {
-          const media = response.data.graphql.shortcode_media;
-          const videoUrl = media.video_url || media.display_url;
-          await downloadAndProcess(videoUrl, format, timestampDir, res);
-        } else {
-          throw new Error('Video URL bulunamadı - Yöntem 2');
+    // İlerleme durumunu izle
+    if (download.stdout) {
+      download.stdout.on('data', (data: Buffer) => {
+        const output = data.toString();
+        const progressMatch = output.match(/(\d+\.\d+)%/);
+        if (progressMatch) {
+          const progress = parseFloat(progressMatch[1]);
+          if (progress > lastProgress) {
+            lastProgress = progress;
+            res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
+          }
         }
-      } catch (error2) {
-        throw new Error('Video indirilemedi: ' + (error2.message || error1.message));
-      }
+      });
     }
+
+    await download;
+
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('İndirilen dosya bulunamadı');
+    }
+
+    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\n');
+    res.end();
+
+    // İndirme tamamlandıktan sonra dosyayı gönder
+    app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
+      res.download(outputPath, fileName, (err: Error | null) => {
+        if (err) {
+          console.error('Dosya gönderme hatası:', err);
+        }
+        fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+          if (rmErr) {
+            console.error('Dizin silme hatası:', rmErr);
+          }
+        });
+      });
+    });
 
   } catch (error) {
     console.error('Instagram indirme hatası:', error);
