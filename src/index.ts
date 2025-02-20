@@ -5,12 +5,21 @@ import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs';
 import ffmpeg from 'ffmpeg-static';
+import axios from 'axios';
+import fluentFfmpeg from 'fluent-ffmpeg';
+import { InstaFetcher } from 'insta-fetcher';
 
 const execAsync = promisify(exec);
+const insta = new InstaFetcher();
 
 interface DownloadRequest {
   url: string;
   format: 'audio' | 'video';
+}
+
+interface ProgressEvent {
+  total?: number;
+  loaded?: number;
 }
 
 dotenv.config();
@@ -77,39 +86,87 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
       fs.mkdirSync(timestampDir, { recursive: true });
     }
 
+    // Instagram post ID'sini al
+    const postId = url.split('/p/')[1]?.split('/')[0];
+    if (!postId) {
+      throw new Error('Geçersiz Instagram URL\'si');
+    }
+
+    // Video bilgilerini al
+    const result = await insta.fetchPost(postId);
+    if (!result || !result.url) {
+      throw new Error('Video URL\'si alınamadı');
+    }
+
     const fileName = generateFileName(format === 'audio' ? 'mp3' : 'mp4');
-    const outputPath = path.join(timestampDir, fileName);
+    const filePath = path.join(timestampDir, fileName);
+    const tempFilePath = path.join(timestampDir, 'temp.mp4');
 
-    // İlerleme durumunu başlat
-    res.write(JSON.stringify({ progress: 0, status: 'starting' }) + '\n');
-
-    try {
-      await downloadVideo(url, format, outputPath);
-      
-      if (!fs.existsSync(outputPath)) {
-        throw new Error('İndirilen dosya bulunamadı');
+    // Video indirme işlemi
+    const response = await axios({
+      method: 'GET',
+      url: result.url,
+      responseType: 'stream',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      },
+      onDownloadProgress: (progressEvent: ProgressEvent) => {
+        if (progressEvent.total && progressEvent.loaded) {
+          const progress = Math.round((progressEvent.loaded * 50) / progressEvent.total);
+          res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
+        }
       }
+    });
 
-      res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\n');
-      res.end();
+    const writer = fs.createWriteStream(tempFilePath);
+    response.data.pipe(writer);
 
-      // İndirme tamamlandıktan sonra dosyayı gönder
-      app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
-        res.download(outputPath, fileName, (err: Error | null) => {
-          if (err) {
-            console.error('Dosya gönderme hatası:', err);
-          }
-          fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
-            if (rmErr) {
-              console.error('Dizin silme hatası:', rmErr);
-            }
-          });
-        });
+    await new Promise<void>((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+
+    if (format === 'audio' && ffmpeg) {
+      await new Promise<void>((resolve, reject) => {
+        if (!ffmpeg) {
+          reject(new Error('FFmpeg yolu bulunamadı'));
+          return;
+        }
+
+        fluentFfmpeg()
+          .setFfmpegPath(ffmpeg)
+          .input(tempFilePath)
+          .toFormat('mp3')
+          .on('progress', (progress: { percent?: number }) => {
+            const percent = 50 + (progress.percent ? Math.min(progress.percent, 100) / 2 : 0);
+            res.write(JSON.stringify({ progress: percent, status: 'converting' }) + '\n');
+          })
+          .on('end', () => resolve())
+          .on('error', (err: Error) => reject(err))
+          .save(filePath);
       });
 
-    } catch (downloadError) {
-      throw new Error(`Video indirilemedi: ${downloadError.message}`);
+      await fs.promises.unlink(tempFilePath);
+    } else {
+      await fs.promises.rename(tempFilePath, filePath);
     }
+
+    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\n');
+    res.end();
+
+    // İndirme tamamlandıktan sonra dosyayı gönder
+    app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
+      res.download(filePath, fileName, (err: Error | null) => {
+        if (err) {
+          console.error('Dosya gönderme hatası:', err);
+        }
+        fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+          if (rmErr) {
+            console.error('Dizin silme hatası:', rmErr);
+          }
+        });
+      });
+    });
 
   } catch (error) {
     console.error('Instagram indirme hatası:', error);
