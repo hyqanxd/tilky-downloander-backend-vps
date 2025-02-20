@@ -60,102 +60,58 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
 
     // Instagram API isteği için özel headers
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'User-Agent': 'Instagram 219.0.0.12.117 Android',
       'Accept': '*/*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Connection': 'keep-alive'
+      'Accept-Language': 'en-US',
+      'Accept-Encoding': 'gzip, deflate',
+      'Connection': 'keep-alive',
+      'X-IG-Capabilities': '3brTvw==',
+      'X-IG-Connection-Type': 'WIFI',
+      'X-IG-Connection-Speed': '1432kbps',
+      'X-IG-Bandwidth-Speed-KBPS': '-1.000',
+      'X-IG-Bandwidth-TotalBytes-B': '0',
+      'X-IG-Bandwidth-TotalTime-MS': '0',
+      'X-FB-HTTP-Engine': 'Liger',
+      'X-FB-Client-IP': 'True',
+      'X-FB-Server-Cluster': 'True'
     };
 
-    // Instagram video URL'sini al
-    const result = await instagramGetUrl(url, {
-      headers: headers
-    });
-
-    if (!result || !result.url_list || result.url_list.length === 0) {
-      throw new Error('Video URL bulunamadı');
-    }
-
-    const videoUrl = result.url_list[0];
-    const fileName = generateFileName(format === 'audio' ? 'mp3' : 'mp4');
-    const filePath = path.join(timestampDir, fileName);
-    const tempFilePath = path.join(timestampDir, 'temp.mp4');
-
-    // Video indirme işlemi
-    const response = await axios({
-      method: 'GET',
-      url: videoUrl,
-      responseType: 'stream',
-      headers: headers,
-      onDownloadProgress: (progressEvent: ProgressEvent) => {
-        if (progressEvent.total) {
-          const progress = Math.round((progressEvent.loaded * 50) / progressEvent.total);
-          res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
-        }
+    try {
+      // İlk deneme: instagram-url-direct ile
+      const result = await instagramGetUrl(url);
+      if (result && result.url_list && result.url_list.length > 0) {
+        const videoUrl = result.url_list[0];
+        await downloadAndProcess(videoUrl, format, timestampDir, res);
+      } else {
+        throw new Error('Video URL bulunamadı - Yöntem 1');
       }
-    });
-
-    // Video dosyasını kaydet
-    const writer = fs.createWriteStream(tempFilePath);
-    response.data.pipe(writer);
-
-    await new Promise<void>((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', reject);
-    });
-
-    if (format === 'audio' && ffmpeg) {
-      // MP3'e dönüştür
-      await new Promise<void>((resolve, reject) => {
-        if (!ffmpeg) {
-          reject(new Error('FFmpeg yolu bulunamadı'));
-          return;
+    } catch (error1) {
+      try {
+        // İkinci deneme: Doğrudan Instagram API'si ile
+        const postId = url.split('/p/')[1]?.split('/')[0];
+        if (!postId) {
+          throw new Error('Geçersiz Instagram URL\'si');
         }
 
-        fluentFfmpeg()
-          .setFfmpegPath(ffmpeg)
-          .input(tempFilePath)
-          .toFormat('mp3')
-          .on('progress', (progress: { percent?: number }) => {
-            const percent = 50 + (progress.percent ? Math.min(progress.percent, 100) / 2 : 0);
-            res.write(JSON.stringify({ progress: percent, status: 'converting' }) + '\n');
-          })
-          .on('end', () => resolve())
-          .on('error', (err: Error) => reject(err))
-          .save(filePath);
-      });
-
-      // Geçici dosyayı sil
-      await fs.promises.unlink(tempFilePath);
-    } else {
-      // MP4 için dosyayı taşı
-      await fs.promises.rename(tempFilePath, filePath);
+        const apiUrl = `https://www.instagram.com/p/${postId}/?__a=1`;
+        const response = await axios.get(apiUrl, { headers });
+        
+        if (response.data && response.data.graphql && response.data.graphql.shortcode_media) {
+          const media = response.data.graphql.shortcode_media;
+          const videoUrl = media.video_url || media.display_url;
+          await downloadAndProcess(videoUrl, format, timestampDir, res);
+        } else {
+          throw new Error('Video URL bulunamadı - Yöntem 2');
+        }
+      } catch (error2) {
+        throw new Error('Video indirilemedi: ' + (error2.message || error1.message));
+      }
     }
-
-    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\n');
-    res.end();
-
-    // İndirme tamamlandıktan sonra dosyayı gönder
-    app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
-      res.download(filePath, fileName, (err: Error | null) => {
-        if (err) {
-          console.error('Dosya gönderme hatası:', err);
-        }
-        // İndirme tamamlandıktan sonra temizlik yap
-        fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
-          if (rmErr) {
-            console.error('Dizin silme hatası:', rmErr);
-          }
-        });
-      });
-    });
 
   } catch (error) {
     console.error('Instagram indirme hatası:', error);
-    // Hata durumunda da temizlik yap
     fs.rm(timestampDir, { recursive: true, force: true }, () => {});
     
-    // Daha detaylı hata mesajı
     let errorMessage = 'Video indirilemedi';
     if (error instanceof Error) {
       errorMessage = error.message;
@@ -167,6 +123,75 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
     res.status(500).json({ error: errorMessage });
   }
 });
+
+// Video indirme ve işleme yardımcı fonksiyonu
+async function downloadAndProcess(videoUrl: string, format: string, timestampDir: string, res: Response) {
+  const fileName = generateFileName(format === 'audio' ? 'mp3' : 'mp4');
+  const filePath = path.join(timestampDir, fileName);
+  const tempFilePath = path.join(timestampDir, 'temp.mp4');
+
+  const response = await axios({
+    method: 'GET',
+    url: videoUrl,
+    responseType: 'stream',
+    onDownloadProgress: (progressEvent: ProgressEvent) => {
+      if (progressEvent.total && progressEvent.loaded) {
+        const progress = Math.round((progressEvent.loaded * 50) / progressEvent.total);
+        res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
+      }
+    }
+  });
+
+  const writer = fs.createWriteStream(tempFilePath);
+  response.data.pipe(writer);
+
+  await new Promise<void>((resolve, reject) => {
+    writer.on('finish', resolve);
+    writer.on('error', reject);
+  });
+
+  if (format === 'audio' && ffmpeg) {
+    await new Promise<void>((resolve, reject) => {
+      if (!ffmpeg) {
+        reject(new Error('FFmpeg yolu bulunamadı'));
+        return;
+      }
+
+      fluentFfmpeg()
+        .setFfmpegPath(ffmpeg)
+        .input(tempFilePath)
+        .toFormat('mp3')
+        .on('progress', (progress: { percent?: number }) => {
+          const percent = 50 + (progress.percent ? Math.min(progress.percent, 100) / 2 : 0);
+          res.write(JSON.stringify({ progress: percent, status: 'converting' }) + '\n');
+        })
+        .on('end', () => resolve())
+        .on('error', (err: Error) => reject(err))
+        .save(filePath);
+    });
+
+    await fs.promises.unlink(tempFilePath);
+  } else {
+    await fs.promises.rename(tempFilePath, filePath);
+  }
+
+  res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\n');
+  res.end();
+
+  // İndirme tamamlandıktan sonra dosyayı gönder
+  app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
+    res.download(filePath, fileName, (err: Error | null) => {
+      if (err) {
+        console.error('Dosya gönderme hatası:', err);
+      }
+      fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+        if (rmErr) {
+          console.error('Dizin silme hatası:', rmErr);
+        }
+      });
+    });
+  });
+}
 
 // YouTube video indirme endpoint'i
 app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, res: Response) => {
