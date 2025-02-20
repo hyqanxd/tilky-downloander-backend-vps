@@ -58,21 +58,36 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
       fs.mkdirSync(timestampDir, { recursive: true });
     }
 
-    const result = await instagramGetUrl(url);
-    if (!result.url_list?.[0]) {
+    // Instagram API isteği için özel headers
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Accept': '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Connection': 'keep-alive'
+    };
+
+    // Instagram video URL'sini al
+    const result = await instagramGetUrl(url, {
+      headers: headers
+    });
+
+    if (!result || !result.url_list || result.url_list.length === 0) {
       throw new Error('Video URL bulunamadı');
     }
 
+    const videoUrl = result.url_list[0];
     const fileName = generateFileName(format === 'audio' ? 'mp3' : 'mp4');
     const filePath = path.join(timestampDir, fileName);
     const tempFilePath = path.join(timestampDir, 'temp.mp4');
 
-    // Önce videoyu indir
+    // Video indirme işlemi
     const response = await axios({
       method: 'GET',
-      url: result.url_list[0],
+      url: videoUrl,
       responseType: 'stream',
-      onDownloadProgress: (progressEvent: any) => {
+      headers: headers,
+      onDownloadProgress: (progressEvent: ProgressEvent) => {
         if (progressEvent.total) {
           const progress = Math.round((progressEvent.loaded * 50) / progressEvent.total);
           res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
@@ -80,11 +95,12 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
       }
     });
 
+    // Video dosyasını kaydet
     const writer = fs.createWriteStream(tempFilePath);
     response.data.pipe(writer);
 
     await new Promise<void>((resolve, reject) => {
-      writer.on('finish', () => resolve());
+      writer.on('finish', resolve);
       writer.on('error', reject);
     });
 
@@ -102,7 +118,7 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
           .toFormat('mp3')
           .on('progress', (progress: { percent?: number }) => {
             const percent = 50 + (progress.percent ? Math.min(progress.percent, 100) / 2 : 0);
-            res.write(JSON.stringify({ progress: percent, status: 'downloading' }) + '\n');
+            res.write(JSON.stringify({ progress: percent, status: 'converting' }) + '\n');
           })
           .on('end', () => resolve())
           .on('error', (err: Error) => reject(err))
@@ -138,7 +154,17 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
     console.error('Instagram indirme hatası:', error);
     // Hata durumunda da temizlik yap
     fs.rm(timestampDir, { recursive: true, force: true }, () => {});
-    res.status(500).json({ error: 'Video indirilemedi' });
+    
+    // Daha detaylı hata mesajı
+    let errorMessage = 'Video indirilemedi';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    } else if (typeof error === 'object' && error && 'response' in error) {
+      const axiosError = error as any;
+      errorMessage = `Instagram API Hatası: ${axiosError.response?.status} - ${axiosError.response?.statusText}`;
+    }
+    
+    res.status(500).json({ error: errorMessage });
   }
 });
 
