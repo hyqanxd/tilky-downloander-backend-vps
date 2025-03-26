@@ -187,7 +187,7 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       ...(ffmpeg ? { ffmpegLocation: ffmpeg } : {})
     } : {
       output: outputPath,
-      format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+      format: 'best[ext=mp4]/best',
       addMetadata: true,
       noCheckCertificate: true,
       quiet: false,
