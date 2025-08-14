@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import ffmpeg from 'ffmpeg-static';
 import axios from 'axios';
 import fluentFfmpeg from 'fluent-ffmpeg';
-es{
+interface DownloadRequest {
   url: string;
   format: 'audio' | 'video';
 }
@@ -23,6 +23,16 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+
+// Platform kontrolü fonksiyonu
+function checkPlatform(url: string): string {
+  if (url.includes('instagram.com') || url.includes('instagr.am')) {
+    return 'instagram';
+  } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
+    return 'youtube';
+  }
+  return 'unknown';
+}
 
 // URL'nin hangtsooluştur
 function generateFileName(extension: string): string {
