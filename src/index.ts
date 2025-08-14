@@ -40,6 +40,18 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// Test endpoint for CORS
+app.get('/api/test-cors', (req: Request, res: Response) => {
+  res.json({ 
+    message: 'CORS is working!',
+    origin: req.headers.origin,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// OPTIONS endpoint for preflight requests
+app.options('/api/download/*', cors(corsOptions));
+
 // Platform kontrolü için fonksiyon
 function checkPlatform(url: string): string {
   if (url.includes('instagram.com') || url.includes('instagr.am')) {
@@ -62,7 +74,17 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
   const timestampDir = path.join(__dirname, '../downloads', Date.now().toString());
   
   try {
+    console.log('Instagram download request received:', req.body);
+    
     const { url, format } = req.body;
+    
+    // Request body validation
+    if (!url || !format) {
+      return res.status(400).json({ 
+        error: 'URL ve format parametreleri gerekli',
+        received: { url: !!url, format: !!format }
+      });
+    }
 
     // Platform kontrolü
     const platform = checkPlatform(url);
@@ -152,9 +174,18 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
 
   } catch (error) {
     console.error('Instagram indirme hatası:', error);
+    
     // Hata durumunda da temizlik yap
     fs.rm(timestampDir, { recursive: true, force: true }, () => {});
-    res.status(500).json({ error: 'Video indirilemedi' });
+    
+    // Daha detaylı hata mesajı
+    const errorMessage = error instanceof Error ? error.message : 'Bilinmeyen hata';
+    console.error('Detaylı hata:', errorMessage);
+    
+    res.status(500).json({ 
+      error: 'Video indirilemedi',
+      details: process.env.NODE_ENV === 'development' ? errorMessage : undefined
+    });
   }
 });
 
