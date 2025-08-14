@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import cors from 'cors';
 import dotenv from 'dotenv';
 import youtubedl from 'youtube-dl-exec';
 import instagramGetUrl from 'instagram-url-direct';
@@ -7,7 +8,8 @@ import * as fs from 'fs';
 import ffmpeg from 'ffmpeg-static';
 import axios from 'axios';
 import fluentFfmpeg from 'fluent-ffmpeg';
-es{
+
+interface DownloadRequest {
   url: string;
   format: 'audio' | 'video';
 }
@@ -22,9 +24,34 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// CORS configuration
+const corsOptions = {
+  origin: [
+    'https://downloader.anitilky.xyz',
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://localhost:4173'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
-// URL'nin hangtsooluştur
+// Platform kontrolü için fonksiyon
+function checkPlatform(url: string): string {
+  if (url.includes('instagram.com') || url.includes('instagr.am')) {
+    return 'instagram';
+  } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
+    return 'youtube';
+  } else {
+    return 'unknown';
+  }
+}
+
+// Dosya adı oluştur
 function generateFileName(extension: string): string {
   const randomNum = Math.floor(Math.random() * 1000000);
   return `tilky-${randomNum}.${extension}`;
