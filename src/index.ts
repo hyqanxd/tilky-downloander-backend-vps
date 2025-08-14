@@ -7,9 +7,7 @@ import * as fs from 'fs';
 import ffmpeg from 'ffmpeg-static';
 import axios from 'axios';
 import fluentFfmpeg from 'fluent-ffmpeg';
-import cors from 'cors';
-
-interface DownloadRequest {
+es{
   url: string;
   format: 'audio' | 'video';
 }
@@ -26,28 +24,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// CORS ayarları
-app.use(cors({
-  origin: ['https://downloader.anitilky.xyz', 'http://localhost:3000', 'http://localhost:5173'],
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
-
-// Preflight istekleri için OPTIONS endpoint'i
-app.options('*', cors());
-
-// URL'nin hangi platforma ait olduğunu kontrol et
-function checkPlatform(url: string): 'youtube' | 'instagram' | 'unsupported' {
-  if (url.includes('youtube.com') || url.includes('youtu.be')) {
-    return 'youtube';
-  } else if (url.includes('instagram.com')) {
-    return 'instagram';
-  }
-  return 'unsupported';
-}
-
-// Rastgele dosya adı oluştur
+// URL'nin hangtsooluştur
 function generateFileName(extension: string): string {
   const randomNum = Math.floor(Math.random() * 1000000);
   return `tilky-${randomNum}.${extension}`;
@@ -260,4 +237,4 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
-});
+}); 
