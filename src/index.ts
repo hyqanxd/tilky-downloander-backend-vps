@@ -27,16 +27,33 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
   origin: [
     'https://downloader.anitilky.xyz',
+    'https://www.downloader.anitilky.xyz',
     'http://localhost:3000',
     'http://localhost:5173',
-    'http://localhost:5174'
+    'http://localhost:5174',
+    'http://localhost:8080'
   ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
+  ],
+  exposedHeaders: ['Content-Length', 'Content-Type'],
+  optionsSuccessStatus: 200,
+  preflightContinue: false
 }));
 
-app.use(express.json());
+// Explicit preflight handling for all routes
+app.options('*', cors());
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Platform kontrolü fonksiyonu
 function checkPlatform(url: string): string {
@@ -56,6 +73,12 @@ function generateFileName(extension: string): string {
 
 // Instagram video indirme endpoint'i
 app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>, res: Response) => {
+  // Explicit CORS headers
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+
   const timestampDir = path.join(__dirname, '../downloads', Date.now().toString());
   
   try {
@@ -210,6 +233,12 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
 
 // YouTube video indirme endpoint'i
 app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, res: Response) => {
+  // Explicit CORS headers
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+
   const timestampDir = path.join(__dirname, '../downloads', Date.now().toString());
   
   try {
