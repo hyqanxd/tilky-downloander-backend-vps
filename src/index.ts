@@ -7,7 +7,9 @@ import * as fs from 'fs';
 import ffmpeg from 'ffmpeg-static';
 import axios from 'axios';
 import fluentFfmpeg from 'fluent-ffmpeg';
-es{
+import cors from 'cors'; // CORS paketini ekleyin
+
+interface DownloadRequest {
   url: string;
   format: 'audio' | 'video';
 }
@@ -22,9 +24,16 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// CORS middleware'ini ekleyin
+app.use(cors({
+  origin: 'https://downloader.anitilky.xyz', // Frontend'inizin origin'i
+  methods: ['GET', 'POST', 'OPTIONS'], // İzin verilen metodlar
+  allowedHeaders: ['Content-Type'], // İzin verilen başlıklar
+}));
+
 app.use(express.json());
 
-// URL'nin hangtsooluştur
+// URL'nin hangi platformdan geldiğini kontrol eden fonksiyon
 function generateFileName(extension: string): string {
   const randomNum = Math.floor(Math.random() * 1000000);
   return `tilky-${randomNum}.${extension}`;
@@ -38,7 +47,7 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
     const { url, format } = req.body;
 
     // Platform kontrolü
-    const platform = checkPlatform(url);
+    const platform = checkPlatform(url); // checkPlatform fonksiyonu tanımlı olmalı
     if (platform !== 'instagram') {
       return res.status(400).json({ error: 'Lütfen geçerli bir Instagram URL\'si girin' });
     }
@@ -139,7 +148,7 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
     const { url, format } = req.body;
 
     // Platform kontrolü
-    const platform = checkPlatform(url);
+    const platform = checkPlatform(url); // checkPlatform fonksiyonu tanımlı olmalı
     if (platform !== 'youtube') {
       return res.status(400).json({ error: 'Lütfen geçerli bir YouTube URL\'si girin' });
     }
@@ -237,4 +246,4 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
-}); 
+});
