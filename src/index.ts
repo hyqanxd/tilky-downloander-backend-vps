@@ -207,6 +207,7 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
     });
 
     // Create download endpoint for this file
+    const currentTimestampDir = timestampDir; // Capture for closure
     app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({ error: 'Dosya bulunamadı' });
@@ -218,7 +219,7 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
         }
         // Clean up after download
         setTimeout(() => {
-          fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+          fs.rm(currentTimestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
             if (rmErr) {
               console.error('Dizin silme hatası:', rmErr);
             }
@@ -241,7 +242,7 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
 
 // YouTube video indirme endpoint'i
 app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, res: Response) => {
-  let timestampDir;
+  let timestampDir: string = '';
   
   try {
     console.log('YouTube endpoint başlatıldı');
@@ -372,6 +373,7 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
     });
 
     // Create download endpoint for this file
+    const currentTimestampDir = timestampDir; // Capture for closure
     app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
       if (!fs.existsSync(outputPath)) {
         return res.status(404).json({ error: 'Dosya bulunamadı' });
@@ -383,7 +385,7 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
         }
         // Clean up after download
         setTimeout(() => {
-          fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+          fs.rm(currentTimestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
             if (rmErr) {
               console.error('Dizin silme hatası:', rmErr);
             }
