@@ -114,48 +114,69 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
 
     console.log('Instagram URL işleniyor:', url);
 
-    // Get Instagram video URL with fallback
+    // Get Instagram video URL - use yt-dlp as primary method
     let bestQualityUrl;
+    
+    // Primary method: yt-dlp (more reliable for Instagram)
     try {
-      const result = await instagramGetUrl(url);
-      if (result.url_list && result.url_list.length > 0) {
-        bestQualityUrl = result.url_list[0];
-        // En yüksek kaliteli URL'yi seç
-        if (result.url_list.length > 1) {
-          for (const videoUrl of result.url_list) {
-            if (videoUrl && (videoUrl.includes('720') || videoUrl.includes('1080'))) {
-              bestQualityUrl = videoUrl;
-              break;
-            }
-          }
+      console.log('yt-dlp ile Instagram URL alınıyor...');
+      const tempInfo = await youtubedl(url, {
+        dumpSingleJson: true,
+        noCheckCertificates: true,
+        noWarnings: true,
+        format: 'best[height<=1080]/best',
+        addHeaders: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Accept-Encoding': 'gzip, deflate',
+          'DNT': '1',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1'
+        }
+      });
+      
+      if (tempInfo && typeof tempInfo === 'object') {
+        const infoObj = tempInfo as any;
+        if (infoObj.url) {
+          bestQualityUrl = infoObj.url;
+          console.log('yt-dlp ile Instagram URL başarıyla alındı');
+        } else if (infoObj.formats && infoObj.formats.length > 0) {
+          // En iyi formatı seç
+          const formats = infoObj.formats.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
+          bestQualityUrl = formats[0].url;
+          console.log('yt-dlp ile Instagram format URL alındı');
+        } else {
+          throw new Error('yt-dlp ile URL bulunamadı');
         }
       } else {
-        throw new Error('URL listesi boş');
+        throw new Error('yt-dlp ile bilgi alınamadı');
       }
-    } catch (instagramError) {
-      console.error('Instagram URL alma hatası:', instagramError);
-      // Fallback to yt-dlp
+    } catch (ytdlError) {
+      console.error('yt-dlp ile Instagram hatası:', ytdlError);
+      
+      // Fallback method: instagram-url-direct
       try {
-        const tempInfo = await youtubedl(url, {
-          dumpSingleJson: true,
-          noCheckCertificates: true,
-          noWarnings: true,
-          format: 'best'
-        });
-        
-        if (tempInfo && typeof tempInfo === 'object') {
-          const infoObj = tempInfo as any;
-          if (infoObj.url) {
-            bestQualityUrl = infoObj.url;
-          } else {
-            throw new Error('yt-dlp ile URL bulunamadı');
+        console.log('instagram-url-direct ile deneniyor...');
+        const result = await instagramGetUrl(url);
+        if (result.url_list && result.url_list.length > 0) {
+          bestQualityUrl = result.url_list[0];
+          // En yüksek kaliteli URL'yi seç
+          if (result.url_list.length > 1) {
+            for (const videoUrl of result.url_list) {
+              if (videoUrl && (videoUrl.includes('720') || videoUrl.includes('1080'))) {
+                bestQualityUrl = videoUrl;
+                break;
+              }
+            }
           }
+          console.log('instagram-url-direct ile URL alındı');
         } else {
-          throw new Error('yt-dlp ile bilgi alınamadı');
+          throw new Error('instagram-url-direct ile URL listesi boş');
         }
-      } catch (ytdlError) {
-        console.error('yt-dlp ile Instagram hatası:', ytdlError);
-        throw new Error('Instagram videosu hiçbir yöntemle alınamadı');
+      } catch (instagramError) {
+        console.error('instagram-url-direct hatası:', instagramError);
+        throw new Error('Instagram videosu hiçbir yöntemle alınamadı. URL\'yi kontrol edin veya daha sonra tekrar deneyin.');
       }
     }
 
@@ -179,7 +200,7 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
       onDownloadProgress: (progressEvent: any) => {
         if (progressEvent.total) {
           const progress = Math.round((progressEvent.loaded * 50) / progressEvent.total);
-          res.write(JSON.stringify({ progress, status: 'downloading' }) + '\\n');
+          res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
         }
       }
     });
@@ -210,7 +231,7 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
           .audioCodec('libmp3lame')
           .on('progress', (progress: { percent?: number }) => {
             const percent = 50 + (progress.percent ? Math.min(progress.percent, 100) / 2 : 0);
-            res.write(JSON.stringify({ progress: percent, status: 'downloading' }) + '\\n');
+            res.write(JSON.stringify({ progress: percent, status: 'downloading' }) + '\n');
           })
           .on('end', () => resolve())
           .on('error', (err: Error) => reject(err))
@@ -224,7 +245,7 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
       await fs.promises.rename(tempFilePath, filePath);
     }
 
-    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\\n');
+    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\n');
     res.end();
 
     // İndirme tamamlandıktan sonra dosyayı gönder
@@ -326,7 +347,7 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
             const progress = parseFloat(progressMatch[1]);
             if (progress > lastProgress) {
               lastProgress = progress;
-              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\\n');
+              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
             }
           }
         });
@@ -353,7 +374,7 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
             const progress = parseFloat(progressMatch[1]);
             if (progress > lastProgress) {
               lastProgress = progress;
-              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\\n');
+              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
             }
           }
         });
@@ -366,7 +387,7 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       throw new Error('İndirilen dosya bulunamadı');
     }
 
-    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\\n');
+    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\n');
     res.end();
 
     // İndirme tamamlandıktan sonra dosyayı gönder
