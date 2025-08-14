@@ -61,35 +61,71 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
   try {
     const { url, format } = req.body;
 
+    // Input validation
+    if (!url || !format) {
+      return res.status(400).json({ error: 'URL ve format gerekli' });
+    }
+
     // Platform kontrolü
     const platform = checkPlatform(url);
     if (platform !== 'instagram') {
       return res.status(400).json({ error: 'Lütfen geçerli bir Instagram URL\'si girin' });
     }
 
+    // Create downloads directory if it doesn't exist
     if (!fs.existsSync(timestampDir)) {
       fs.mkdirSync(timestampDir, { recursive: true });
     }
 
-    const result = await instagramGetUrl(url);
-    if (!result.url_list?.[0]) {
+    console.log('Instagram URL işleniyor:', url);
+
+    // Get Instagram video URL
+    let result;
+    try {
+      result = await instagramGetUrl(url);
+      console.log('Instagram URL sonucu:', result);
+    } catch (instagramError) {
+      console.error('Instagram URL alma hatası:', instagramError);
+      throw new Error('Instagram videosu bulunamadı veya erişilemedi');
+    }
+
+    if (!result.url_list || result.url_list.length === 0) {
       throw new Error('Video URL bulunamadı');
     }
+
+    // En yüksek kaliteli URL'yi seç (genellikle ilk URL en yüksek kalitedir)
+    let bestQualityUrl = result.url_list[0];
+    
+    // Eğer birden fazla URL varsa, en yüksek çözünürlüklü olanı bul
+    if (result.url_list.length > 1) {
+      // Instagram genellikle en yüksek kaliteyi ilk sıraya koyar, ama kontrol edelim
+      for (const videoUrl of result.url_list) {
+        if (videoUrl && videoUrl.includes('720') || videoUrl.includes('1080')) {
+          bestQualityUrl = videoUrl;
+          break;
+        }
+      }
+    }
+    
+    console.log('Seçilen en yüksek kalite URL:', bestQualityUrl);
 
     const fileName = generateFileName(format === 'audio' ? 'mp3' : 'mp4');
     const filePath = path.join(timestampDir, fileName);
     const tempFilePath = path.join(timestampDir, 'temp.mp4');
 
-    // Önce videoyu indir
+    console.log('Video indiriliyor:', bestQualityUrl);
+
+    // Download video with best quality
     const response = await axios({
       method: 'GET',
-      url: result.url_list[0],
+      url: bestQualityUrl,
       responseType: 'stream',
-      onDownloadProgress: (progressEvent: any) => {
-        if (progressEvent.total) {
-          const progress = Math.round((progressEvent.loaded * 50) / progressEvent.total);
-          res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
-        }
+      timeout: 60000, // 60 second timeout for high quality videos
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
+        'Accept-Encoding': 'identity',
+        'Range': 'bytes=0-'
       }
     });
 
@@ -101,8 +137,10 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
       writer.on('error', reject);
     });
 
+    console.log('Video indirildi, işleniyor...');
+
     if (format === 'audio' && ffmpeg) {
-      // MP3'e dönüştür
+      // Convert to high quality MP3
       await new Promise<void>((resolve, reject) => {
         if (!ffmpeg) {
           reject(new Error('FFmpeg yolu bulunamadı'));
@@ -113,45 +151,60 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
           .setFfmpegPath(ffmpeg)
           .input(tempFilePath)
           .toFormat('mp3')
-          .on('progress', (progress: { percent?: number }) => {
-            const percent = 50 + (progress.percent ? Math.min(progress.percent, 100) / 2 : 0);
-            res.write(JSON.stringify({ progress: percent, status: 'downloading' }) + '\n');
-          })
+          .audioBitrate(320) // En yüksek kalite: 320 kbps
+          .audioFrequency(48000) // Yüksek sample rate
+          .audioChannels(2) // Stereo
+          .audioCodec('libmp3lame') // En iyi MP3 encoder
           .on('end', () => resolve())
           .on('error', (err: Error) => reject(err))
           .save(filePath);
       });
 
-      // Geçici dosyayı sil
+      // Delete temp file
       await fs.promises.unlink(tempFilePath);
     } else {
-      // MP4 için dosyayı taşı
+      // Move file for MP4
       await fs.promises.rename(tempFilePath, filePath);
     }
 
-    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\n');
-    res.end();
+    console.log('İşlem tamamlandı:', fileName);
 
-    // İndirme tamamlandıktan sonra dosyayı gönder
+    // Return success response with download URL
+    res.json({ 
+      success: true, 
+      fileName, 
+      downloadUrl: `/api/download/${fileName}`,
+      message: 'Video başarıyla işlendi (En yüksek kalite)' 
+    });
+
+    // Create download endpoint for this file
     app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'Dosya bulunamadı' });
+      }
+
       res.download(filePath, fileName, (err: Error | null) => {
         if (err) {
           console.error('Dosya gönderme hatası:', err);
         }
-        // İndirme tamamlandıktan sonra temizlik yap
-        fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
-          if (rmErr) {
-            console.error('Dizin silme hatası:', rmErr);
-          }
-        });
+        // Clean up after download
+        setTimeout(() => {
+          fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+            if (rmErr) {
+              console.error('Dizin silme hatası:', rmErr);
+            }
+          });
+        }, 5000); // Wait 5 seconds before cleanup
       });
     });
 
   } catch (error) {
     console.error('Instagram indirme hatası:', error);
-    // Hata durumunda da temizlik yap
+    // Clean up on error
     fs.rm(timestampDir, { recursive: true, force: true }, () => {});
-    res.status(500).json({ error: 'Video indirilemedi' });
+    
+    const errorMessage = error instanceof Error ? error.message : 'Video indirilemedi';
+    res.status(500).json({ error: errorMessage });
   }
 });
 
@@ -162,11 +215,18 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
   try {
     const { url, format } = req.body;
 
+    // Input validation
+    if (!url || !format) {
+      return res.status(400).json({ error: 'URL ve format gerekli' });
+    }
+
     // Platform kontrolü
     const platform = checkPlatform(url);
     if (platform !== 'youtube') {
       return res.status(400).json({ error: 'Lütfen geçerli bir YouTube URL\'si girin' });
     }
+
+    console.log('YouTube URL işleniyor:', url, 'Format:', format);
 
     if (!fs.existsSync(timestampDir)) {
       fs.mkdirSync(timestampDir, { recursive: true });
@@ -192,16 +252,26 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       output: outputPath,
       extractAudio: true,
       audioFormat: 'mp3',
-      audioQuality: 0,
+      audioQuality: 0, // En yüksek ses kalitesi
+      format: 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio', // En iyi ses formatı
+      postprocessorArgs: [
+        '-ar', '48000', // Sample rate: 48kHz
+        '-ab', '320k',  // Bitrate: 320 kbps
+        '-ac', '2'      // Stereo
+      ],
       addMetadata: true,
+      embedSubs: false,
       noCheckCertificate: true,
       quiet: false,
       progress: true,
       ...(ffmpeg ? { ffmpegLocation: ffmpeg } : {})
     } : {
       output: outputPath,
-      format: 'best',
+      format: 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/bestvideo+bestaudio/best', // 4K'ya kadar destekle
+      mergeOutputFormat: 'mp4',
       addMetadata: true,
+      embedSubs: false,
+      writeSubtitles: false,
       noCheckCertificate: true,
       quiet: false,
       progress: true,
@@ -235,7 +305,7 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       // Alternatif formatta tekrar dene
       const alternativeOptions = {
         ...options,
-        format: format === 'audio' ? 'bestaudio' : 'best'
+        format: format === 'audio' ? 'bestaudio[ext=m4a]/bestaudio' : 'best[height<=1080]/bestvideo+bestaudio/best'
       };
       
       const download = youtubedl.exec(url, alternativeOptions);
@@ -262,29 +332,44 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       throw new Error('İndirilen dosya bulunamadı');
     }
 
-    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\n');
-    res.end();
+    console.log('YouTube işlem tamamlandı:', fileName);
 
-    // İndirme tamamlandıktan sonra dosyayı gönder
+    // Return success response with download URL
+    res.json({ 
+      success: true, 
+      fileName, 
+      downloadUrl: `/api/download/${fileName}`,
+      message: 'Video başarıyla işlendi (En yüksek kalite)' 
+    });
+
+    // Create download endpoint for this file
     app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
+      if (!fs.existsSync(outputPath)) {
+        return res.status(404).json({ error: 'Dosya bulunamadı' });
+      }
+
       res.download(outputPath, fileName, (err: Error | null) => {
         if (err) {
           console.error('Dosya gönderme hatası:', err);
         }
-        // İndirme tamamlandıktan sonra temizlik yap
-        fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
-          if (rmErr) {
-            console.error('Dizin silme hatası:', rmErr);
-          }
-        });
+        // Clean up after download
+        setTimeout(() => {
+          fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+            if (rmErr) {
+              console.error('Dizin silme hatası:', rmErr);
+            }
+          });
+        }, 5000); // Wait 5 seconds before cleanup
       });
     });
 
   } catch (error) {
     console.error('YouTube indirme hatası:', error);
-    // Hata durumunda da temizlik yap
+    // Clean up on error
     fs.rm(timestampDir, { recursive: true, force: true }, () => {});
-    res.status(500).json({ error: 'Video indirilemedi' });
+    
+    const errorMessage = error instanceof Error ? error.message : 'Video indirilemedi';
+    res.status(500).json({ error: errorMessage });
   }
 });
 
