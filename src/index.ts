@@ -176,7 +176,7 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       ...(ffmpeg ? { ffmpegLocation: ffmpeg } : {})
     } : {
       output: outputPath,
-      format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+      format: 'best',
       addMetadata: true,
       noCheckCertificate: true,
       quiet: false,
@@ -185,25 +185,54 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
     };
 
     // İndirme işlemini başlat
-    const download = youtubedl.exec(url, options);
-    let lastProgress = 0;
+    try {
+      const download = youtubedl.exec(url, options);
+      let lastProgress = 0;
 
-    // İlerleme durumunu izle
-    if (download.stdout) {
-      download.stdout.on('data', (data) => {
-        const output = data.toString();
-        const progressMatch = output.match(/(\d+\.\d+)%/);
-        if (progressMatch) {
-          const progress = parseFloat(progressMatch[1]);
-          if (progress > lastProgress) {
-            lastProgress = progress;
-            res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
+      // İlerleme durumunu izle
+      if (download.stdout) {
+        download.stdout.on('data', (data) => {
+          const output = data.toString();
+          const progressMatch = output.match(/(\d+\.\d+)%/);
+          if (progressMatch) {
+            const progress = parseFloat(progressMatch[1]);
+            if (progress > lastProgress) {
+              lastProgress = progress;
+              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
+            }
           }
-        }
-      });
-    }
+        });
+      }
 
-    await download;
+      await download;
+    } catch (downloadError) {
+      console.error('İlk indirme denemesi başarısız:', downloadError);
+      
+      // Alternatif formatta tekrar dene
+      const alternativeOptions = {
+        ...options,
+        format: format === 'audio' ? 'bestaudio' : 'best'
+      };
+      
+      const download = youtubedl.exec(url, alternativeOptions);
+      let lastProgress = 0;
+      
+      if (download.stdout) {
+        download.stdout.on('data', (data) => {
+          const output = data.toString();
+          const progressMatch = output.match(/(\d+\.\d+)%/);
+          if (progressMatch) {
+            const progress = parseFloat(progressMatch[1]);
+            if (progress > lastProgress) {
+              lastProgress = progress;
+              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
+            }
+          }
+        });
+      }
+      
+      await download;
+    }
 
     if (!fs.existsSync(outputPath)) {
       throw new Error('İndirilen dosya bulunamadı');
