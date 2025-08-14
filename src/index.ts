@@ -79,35 +79,64 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
 
     console.log('Instagram URL işleniyor:', url);
 
-    // Get Instagram video URL
-    let result;
-    try {
-      result = await instagramGetUrl(url);
-      console.log('Instagram URL sonucu:', result);
-    } catch (instagramError) {
-      console.error('Instagram URL alma hatası:', instagramError);
-      throw new Error('Instagram videosu bulunamadı veya erişilemedi');
-    }
-
-    if (!result.url_list || result.url_list.length === 0) {
-      throw new Error('Video URL bulunamadı');
-    }
-
-    // En yüksek kaliteli URL'yi seç (genellikle ilk URL en yüksek kalitedir)
-    let bestQualityUrl = result.url_list[0];
+    // Get Instagram video URL - try multiple methods
+    let bestQualityUrl;
     
-    // Eğer birden fazla URL varsa, en yüksek çözünürlüklü olanı bul
-    if (result.url_list.length > 1) {
-      // Instagram genellikle en yüksek kaliteyi ilk sıraya koyar, ama kontrol edelim
-      for (const videoUrl of result.url_list) {
-        if (videoUrl && videoUrl.includes('720') || videoUrl.includes('1080')) {
-          bestQualityUrl = videoUrl;
-          break;
+    try {
+      // Method 1: Try instagram-url-direct first
+      console.log('Instagram URL alınıyor (Method 1)...');
+      const result = await instagramGetUrl(url);
+      console.log('Instagram URL sonucu:', result);
+      
+      if (result.url_list && result.url_list.length > 0) {
+        bestQualityUrl = result.url_list[0];
+        
+        // En yüksek kaliteli URL'yi seç
+        if (result.url_list.length > 1) {
+          for (const videoUrl of result.url_list) {
+            if (videoUrl && (videoUrl.includes('720') || videoUrl.includes('1080'))) {
+              bestQualityUrl = videoUrl;
+              break;
+            }
+          }
         }
+        console.log('Seçilen en yüksek kalite URL:', bestQualityUrl);
+      } else {
+        throw new Error('URL listesi boş');
+      }
+    } catch (instagramError) {
+      console.error('Instagram URL alma hatası (Method 1):', instagramError);
+      
+      // Method 2: Try using yt-dlp as fallback for Instagram
+      console.log('Instagram için yt-dlp kullanılıyor (Method 2)...');
+      try {
+        const tempInfo = await youtubedl(url, {
+          dumpSingleJson: true,
+          noCheckCertificates: true,
+          noWarnings: true,
+          format: 'best'
+        });
+        
+        if (tempInfo && typeof tempInfo === 'object') {
+          const infoObj = tempInfo as any;
+          if (infoObj.url) {
+            bestQualityUrl = infoObj.url;
+            console.log('yt-dlp ile Instagram URL alındı:', bestQualityUrl);
+          } else {
+            throw new Error('yt-dlp ile URL bulunamadı');
+          }
+        } else {
+          throw new Error('yt-dlp ile bilgi alınamadı');
+        }
+      } catch (ytdlError) {
+        console.error('yt-dlp ile Instagram hatası:', ytdlError);
+        throw new Error('Instagram videosu hiçbir yöntemle alınamadı. Lütfen URL\'yi kontrol edin veya daha sonra tekrar deneyin.');
       }
     }
-    
-    console.log('Seçilen en yüksek kalite URL:', bestQualityUrl);
+
+    if (!bestQualityUrl) {
+      throw new Error('Video URL bulunamadı');
+    }
 
     const fileName = generateFileName(format === 'audio' ? 'mp3' : 'mp4');
     const filePath = path.join(timestampDir, fileName);
@@ -201,7 +230,9 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
   } catch (error) {
     console.error('Instagram indirme hatası:', error);
     // Clean up on error
-    fs.rm(timestampDir, { recursive: true, force: true }, () => {});
+    if (timestampDir) {
+      fs.rm(timestampDir, { recursive: true, force: true }, () => {});
+    }
     
     const errorMessage = error instanceof Error ? error.message : 'Video indirilemedi';
     res.status(500).json({ error: errorMessage });
@@ -210,9 +241,17 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
 
 // YouTube video indirme endpoint'i
 app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, res: Response) => {
-  const timestampDir = path.join(__dirname, '../downloads', Date.now().toString());
+  let timestampDir;
   
   try {
+    console.log('YouTube endpoint başlatıldı');
+    console.log('Request body:', req.body);
+    
+    // Create downloads directory path
+    const downloadsPath = path.join(process.cwd(), 'downloads', Date.now().toString());
+    timestampDir = downloadsPath;
+    console.log('YouTube Downloads directory path:', timestampDir);
+  
     const { url, format } = req.body;
 
     // Input validation
@@ -255,21 +294,16 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       audioQuality: 0, // En yüksek ses kalitesi (0 = en iyi)
       format: 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio', // En iyi ses formatı
       addMetadata: true,
-      embedSubs: false,
       noCheckCertificate: true,
-      quiet: false,
-      progress: true,
+      noWarnings: true,
       ...(ffmpeg ? { ffmpegLocation: ffmpeg } : {})
     } : {
       output: outputPath,
       format: 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/bestvideo+bestaudio/best', // 4K'ya kadar destekle
       mergeOutputFormat: 'mp4',
       addMetadata: true,
-      embedSubs: false,
-      writeSubtitles: false,
       noCheckCertificate: true,
-      quiet: false,
-      progress: true,
+      noWarnings: true,
       ...(ffmpeg ? { ffmpegLocation: ffmpeg } : {})
     } as any;
 
@@ -361,7 +395,9 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
   } catch (error) {
     console.error('YouTube indirme hatası:', error);
     // Clean up on error
-    fs.rm(timestampDir, { recursive: true, force: true }, () => {});
+    if (timestampDir) {
+      fs.rm(timestampDir, { recursive: true, force: true }, () => {});
+    }
     
     const errorMessage = error instanceof Error ? error.message : 'Video indirilemedi';
     res.status(500).json({ error: errorMessage });
