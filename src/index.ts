@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import ffmpeg from 'ffmpeg-static';
 import axios from 'axios';
 import fluentFfmpeg from 'fluent-ffmpeg';
+
 interface DownloadRequest {
   url: string;
   format: 'audio' | 'video';
@@ -27,16 +28,56 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
   origin: [
     'https://downloader.anitilky.xyz',
+    'https://www.downloader.anitilky.xyz',
     'http://localhost:3000',
     'http://localhost:5173',
-    'http://localhost:5174'
+    'http://localhost:5174',
+    'http://localhost:8080'
   ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
+  ],
+  exposedHeaders: ['Content-Length', 'Content-Type'],
+  optionsSuccessStatus: 200,
+  preflightContinue: false
 }));
 
-app.use(express.json());
+// Explicit preflight handling for all routes
+app.options('*', cors());
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Health check endpoint
+app.get('/health', (req: Request, res: Response) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    message: 'TilkyDownloader API is running' 
+  });
+});
+
+// API status endpoint
+app.get('/api/status', (req: Request, res: Response) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.json({ 
+    status: 'active',
+    version: '1.0.0',
+    endpoints: {
+      instagram: '/api/download/instagram',
+      youtube: '/api/download/youtube'
+    }
+  });
+});
 
 // Platform kontrolü fonksiyonu
 function checkPlatform(url: string): string {
@@ -56,15 +97,10 @@ function generateFileName(extension: string): string {
 
 // Instagram video indirme endpoint'i
 app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>, res: Response) => {
-  const timestampDir = path.join(__dirname, '../downloads', Date.now().toString());
+  const timestampDir = path.join(process.cwd(), 'downloads', Date.now().toString());
   
   try {
     const { url, format } = req.body;
-
-    // Input validation
-    if (!url || !format) {
-      return res.status(400).json({ error: 'URL ve format gerekli' });
-    }
 
     // Platform kontrolü
     const platform = checkPlatform(url);
@@ -72,25 +108,18 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
       return res.status(400).json({ error: 'Lütfen geçerli bir Instagram URL\'si girin' });
     }
 
-    // Create downloads directory if it doesn't exist
     if (!fs.existsSync(timestampDir)) {
       fs.mkdirSync(timestampDir, { recursive: true });
     }
 
     console.log('Instagram URL işleniyor:', url);
 
-    // Get Instagram video URL - try multiple methods
+    // Get Instagram video URL with fallback
     let bestQualityUrl;
-    
     try {
-      // Method 1: Try instagram-url-direct first
-      console.log('Instagram URL alınıyor (Method 1)...');
       const result = await instagramGetUrl(url);
-      console.log('Instagram URL sonucu:', result);
-      
       if (result.url_list && result.url_list.length > 0) {
         bestQualityUrl = result.url_list[0];
-        
         // En yüksek kaliteli URL'yi seç
         if (result.url_list.length > 1) {
           for (const videoUrl of result.url_list) {
@@ -100,15 +129,12 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
             }
           }
         }
-        console.log('Seçilen en yüksek kalite URL:', bestQualityUrl);
       } else {
         throw new Error('URL listesi boş');
       }
     } catch (instagramError) {
-      console.error('Instagram URL alma hatası (Method 1):', instagramError);
-      
-      // Method 2: Try using yt-dlp as fallback for Instagram
-      console.log('Instagram için yt-dlp kullanılıyor (Method 2)...');
+      console.error('Instagram URL alma hatası:', instagramError);
+      // Fallback to yt-dlp
       try {
         const tempInfo = await youtubedl(url, {
           dumpSingleJson: true,
@@ -121,7 +147,6 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
           const infoObj = tempInfo as any;
           if (infoObj.url) {
             bestQualityUrl = infoObj.url;
-            console.log('yt-dlp ile Instagram URL alındı:', bestQualityUrl);
           } else {
             throw new Error('yt-dlp ile URL bulunamadı');
           }
@@ -130,7 +155,7 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
         }
       } catch (ytdlError) {
         console.error('yt-dlp ile Instagram hatası:', ytdlError);
-        throw new Error('Instagram videosu hiçbir yöntemle alınamadı. Lütfen URL\'yi kontrol edin veya daha sonra tekrar deneyin.');
+        throw new Error('Instagram videosu hiçbir yöntemle alınamadı');
       }
     }
 
@@ -142,19 +167,20 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
     const filePath = path.join(timestampDir, fileName);
     const tempFilePath = path.join(timestampDir, 'temp.mp4');
 
-    console.log('Video indiriliyor:', bestQualityUrl);
-
-    // Download video with best quality
+    // Önce videoyu indir
     const response = await axios({
       method: 'GET',
       url: bestQualityUrl,
       responseType: 'stream',
-      timeout: 60000, // 60 second timeout for high quality videos
+      timeout: 60000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
-        'Accept-Encoding': 'identity',
-        'Range': 'bytes=0-'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      onDownloadProgress: (progressEvent: any) => {
+        if (progressEvent.total) {
+          const progress = Math.round((progressEvent.loaded * 50) / progressEvent.total);
+          res.write(JSON.stringify({ progress, status: 'downloading' }) + '\\n');
+        }
       }
     });
 
@@ -166,10 +192,8 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
       writer.on('error', reject);
     });
 
-    console.log('Video indirildi, işleniyor...');
-
     if (format === 'audio' && ffmpeg) {
-      // Convert to high quality MP3
+      // MP3'e dönüştür
       await new Promise<void>((resolve, reject) => {
         if (!ffmpeg) {
           reject(new Error('FFmpeg yolu bulunamadı'));
@@ -180,99 +204,65 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
           .setFfmpegPath(ffmpeg)
           .input(tempFilePath)
           .toFormat('mp3')
-          .audioBitrate(320) // En yüksek kalite: 320 kbps
-          .audioFrequency(48000) // Yüksek sample rate
-          .audioChannels(2) // Stereo
-          .audioCodec('libmp3lame') // En iyi MP3 encoder
+          .audioBitrate(320)
+          .audioFrequency(48000)
+          .audioChannels(2)
+          .audioCodec('libmp3lame')
+          .on('progress', (progress: { percent?: number }) => {
+            const percent = 50 + (progress.percent ? Math.min(progress.percent, 100) / 2 : 0);
+            res.write(JSON.stringify({ progress: percent, status: 'downloading' }) + '\\n');
+          })
           .on('end', () => resolve())
           .on('error', (err: Error) => reject(err))
           .save(filePath);
       });
 
-      // Delete temp file
+      // Geçici dosyayı sil
       await fs.promises.unlink(tempFilePath);
     } else {
-      // Move file for MP4
+      // MP4 için dosyayı taşı
       await fs.promises.rename(tempFilePath, filePath);
     }
 
-    console.log('İşlem tamamlandı:', fileName);
+    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\\n');
+    res.end();
 
-    // Create download endpoint for this file BEFORE sending response
-    const currentTimestampDir = timestampDir; // Capture for closure
-    const downloadRoute = `/api/download/${fileName}`;
-    
-    // Check if route already exists to avoid duplicate routes
-    if (!app._router || !app._router.stack.some((layer: any) => layer.route && layer.route.path === downloadRoute)) {
-      app.get(downloadRoute, (req: Request, res: Response) => {
-        // Add CORS headers for download
-        res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-        res.header('Access-Control-Allow-Credentials', 'true');
-        
-        if (!fs.existsSync(filePath)) {
-          return res.status(404).json({ error: 'Dosya bulunamadı' });
+    // İndirme tamamlandıktan sonra dosyayı gönder
+    app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
+      res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+      res.header('Access-Control-Allow-Credentials', 'true');
+      
+      res.download(filePath, fileName, (err: Error | null) => {
+        if (err) {
+          console.error('Dosya gönderme hatası:', err);
         }
-
-        res.download(filePath, fileName, (err: Error | null) => {
-          if (err) {
-            console.error('Dosya gönderme hatası:', err);
-          }
-          // Clean up after download
-          setTimeout(() => {
-            fs.rm(currentTimestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
-              if (rmErr) {
-                console.error('Dizin silme hatası:', rmErr);
-              }
-            });
-          }, 5000); // Wait 5 seconds before cleanup
-        });
+        // İndirme tamamlandıktan sonra temizlik yap
+        setTimeout(() => {
+          fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+            if (rmErr) {
+              console.error('Dizin silme hatası:', rmErr);
+            }
+          });
+        }, 5000);
       });
-    }
-
-    // Return success response with download URL
-    if (!res.headersSent) {
-      res.json({ 
-        success: true, 
-        fileName, 
-        downloadUrl: downloadRoute,
-        directDownload: `https://downloaderapi.anitilky.xyz${downloadRoute}`,
-        message: 'Video başarıyla işlendi (En yüksek kalite)' 
-      });
-    }
+    });
 
   } catch (error) {
     console.error('Instagram indirme hatası:', error);
-    // Clean up on error
-    if (timestampDir) {
-      fs.rm(timestampDir, { recursive: true, force: true }, () => {});
-    }
-    
-    const errorMessage = error instanceof Error ? error.message : 'Video indirilemedi';
+    // Hata durumunda da temizlik yap
+    fs.rm(timestampDir, { recursive: true, force: true }, () => {});
     if (!res.headersSent) {
-      res.status(500).json({ error: errorMessage });
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Video indirilemedi' });
     }
   }
 });
 
 // YouTube video indirme endpoint'i
 app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, res: Response) => {
-  let timestampDir: string = '';
+  const timestampDir = path.join(process.cwd(), 'downloads', Date.now().toString());
   
   try {
-    console.log('YouTube endpoint başlatıldı');
-    console.log('Request body:', req.body);
-    
-    // Create downloads directory path
-    const downloadsPath = path.join(process.cwd(), 'downloads', Date.now().toString());
-    timestampDir = downloadsPath;
-    console.log('YouTube Downloads directory path:', timestampDir);
-  
     const { url, format } = req.body;
-
-    // Input validation
-    if (!url || !format) {
-      return res.status(400).json({ error: 'URL ve format gerekli' });
-    }
 
     // Platform kontrolü
     const platform = checkPlatform(url);
@@ -280,11 +270,11 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       return res.status(400).json({ error: 'Lütfen geçerli bir YouTube URL\'si girin' });
     }
 
-    console.log('YouTube URL işleniyor:', url, 'Format:', format);
-
     if (!fs.existsSync(timestampDir)) {
       fs.mkdirSync(timestampDir, { recursive: true });
     }
+
+    console.log('YouTube URL işleniyor:', url, 'Format:', format);
 
     // Önce video bilgilerini al
     const info = await youtubedl(url, {
@@ -306,15 +296,15 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       output: outputPath,
       extractAudio: true,
       audioFormat: 'mp3',
-      audioQuality: 0, // En yüksek ses kalitesi (0 = en iyi)
-      format: 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio', // En iyi ses formatı
+      audioQuality: 0,
+      format: 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio',
       addMetadata: true,
       noCheckCertificate: true,
       noWarnings: true,
       ...(ffmpeg ? { ffmpegLocation: ffmpeg } : {})
     } : {
       output: outputPath,
-      format: 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/bestvideo+bestaudio/best', // 4K'ya kadar destekle
+      format: 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/bestvideo+bestaudio/best',
       mergeOutputFormat: 'mp4',
       addMetadata: true,
       noCheckCertificate: true,
@@ -329,14 +319,14 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
 
       // İlerleme durumunu izle
       if (download.stdout) {
-        download.stdout.on('data', (data) => {
+        download.stdout.on('data', (data: any) => {
           const output = data.toString();
-          const progressMatch = output.match(/(\d+\.\d+)%/);
+          const progressMatch = output.match(/(\\d+\\.\\d+)%/);
           if (progressMatch) {
             const progress = parseFloat(progressMatch[1]);
             if (progress > lastProgress) {
               lastProgress = progress;
-              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
+              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\\n');
             }
           }
         });
@@ -356,14 +346,14 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       let lastProgress = 0;
       
       if (download.stdout) {
-        download.stdout.on('data', (data) => {
+        download.stdout.on('data', (data: any) => {
           const output = data.toString();
-          const progressMatch = output.match(/(\d+\.\d+)%/);
+          const progressMatch = output.match(/(\\d+\\.\\d+)%/);
           if (progressMatch) {
             const progress = parseFloat(progressMatch[1]);
             if (progress > lastProgress) {
               lastProgress = progress;
-              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\n');
+              res.write(JSON.stringify({ progress, status: 'downloading' }) + '\\n');
             }
           }
         });
@@ -376,64 +366,39 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
       throw new Error('İndirilen dosya bulunamadı');
     }
 
-    console.log('YouTube işlem tamamlandı:', fileName);
+    res.write(JSON.stringify({ progress: 100, status: 'completed', fileName }) + '\\n');
+    res.end();
 
-    // Create download endpoint for this file BEFORE sending response
-    const currentTimestampDir = timestampDir; // Capture for closure
-    const downloadRoute = `/api/download/${fileName}`;
-    
-    // Check if route already exists to avoid duplicate routes
-    if (!app._router || !app._router.stack.some((layer: any) => layer.route && layer.route.path === downloadRoute)) {
-      app.get(downloadRoute, (req: Request, res: Response) => {
-        // Add CORS headers for download
-        res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-        res.header('Access-Control-Allow-Credentials', 'true');
-        
-        if (!fs.existsSync(outputPath)) {
-          return res.status(404).json({ error: 'Dosya bulunamadı' });
+    // İndirme tamamlandıktan sonra dosyayı gönder
+    app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
+      res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+      res.header('Access-Control-Allow-Credentials', 'true');
+      
+      res.download(outputPath, fileName, (err: Error | null) => {
+        if (err) {
+          console.error('Dosya gönderme hatası:', err);
         }
-
-        res.download(outputPath, fileName, (err: Error | null) => {
-          if (err) {
-            console.error('Dosya gönderme hatası:', err);
-          }
-          // Clean up after download
-          setTimeout(() => {
-            fs.rm(currentTimestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
-              if (rmErr) {
-                console.error('Dizin silme hatası:', rmErr);
-              }
-            });
-          }, 5000); // Wait 5 seconds before cleanup
-        });
+        // İndirme tamamlandıktan sonra temizlik yap
+        setTimeout(() => {
+          fs.rm(timestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+            if (rmErr) {
+              console.error('Dizin silme hatası:', rmErr);
+            }
+          });
+        }, 5000);
       });
-    }
-
-    // Return success response with download URL
-    if (!res.headersSent) {
-      res.json({ 
-        success: true, 
-        fileName, 
-        downloadUrl: downloadRoute,
-        directDownload: `https://downloaderapi.anitilky.xyz${downloadRoute}`,
-        message: 'Video başarıyla işlendi (En yüksek kalite)' 
-      });
-    }
+    });
 
   } catch (error) {
     console.error('YouTube indirme hatası:', error);
-    // Clean up on error
-    if (timestampDir) {
-      fs.rm(timestampDir, { recursive: true, force: true }, () => {});
-    }
-    
-    const errorMessage = error instanceof Error ? error.message : 'Video indirilemedi';
+    // Hata durumunda da temizlik yap
+    fs.rm(timestampDir, { recursive: true, force: true }, () => {});
     if (!res.headersSent) {
-      res.status(500).json({ error: errorMessage });
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Video indirilemedi' });
     }
   }
 });
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
-}); 
+});
