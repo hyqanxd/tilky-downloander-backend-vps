@@ -198,35 +198,47 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
 
     console.log('İşlem tamamlandı:', fileName);
 
-    // Return success response with download URL
-    res.json({ 
-      success: true, 
-      fileName, 
-      downloadUrl: `/api/download/${fileName}`,
-      message: 'Video başarıyla işlendi (En yüksek kalite)' 
-    });
-
-    // Create download endpoint for this file
+    // Create download endpoint for this file BEFORE sending response
     const currentTimestampDir = timestampDir; // Capture for closure
-    app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
-      if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ error: 'Dosya bulunamadı' });
-      }
-
-      res.download(filePath, fileName, (err: Error | null) => {
-        if (err) {
-          console.error('Dosya gönderme hatası:', err);
+    const downloadRoute = `/api/download/${fileName}`;
+    
+    // Check if route already exists to avoid duplicate routes
+    if (!app._router || !app._router.stack.some((layer: any) => layer.route && layer.route.path === downloadRoute)) {
+      app.get(downloadRoute, (req: Request, res: Response) => {
+        // Add CORS headers for download
+        res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+        res.header('Access-Control-Allow-Credentials', 'true');
+        
+        if (!fs.existsSync(filePath)) {
+          return res.status(404).json({ error: 'Dosya bulunamadı' });
         }
-        // Clean up after download
-        setTimeout(() => {
-          fs.rm(currentTimestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
-            if (rmErr) {
-              console.error('Dizin silme hatası:', rmErr);
-            }
-          });
-        }, 5000); // Wait 5 seconds before cleanup
+
+        res.download(filePath, fileName, (err: Error | null) => {
+          if (err) {
+            console.error('Dosya gönderme hatası:', err);
+          }
+          // Clean up after download
+          setTimeout(() => {
+            fs.rm(currentTimestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+              if (rmErr) {
+                console.error('Dizin silme hatası:', rmErr);
+              }
+            });
+          }, 5000); // Wait 5 seconds before cleanup
+        });
       });
-    });
+    }
+
+    // Return success response with download URL
+    if (!res.headersSent) {
+      res.json({ 
+        success: true, 
+        fileName, 
+        downloadUrl: downloadRoute,
+        directDownload: `https://downloaderapi.anitilky.xyz${downloadRoute}`,
+        message: 'Video başarıyla işlendi (En yüksek kalite)' 
+      });
+    }
 
   } catch (error) {
     console.error('Instagram indirme hatası:', error);
@@ -236,7 +248,9 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
     }
     
     const errorMessage = error instanceof Error ? error.message : 'Video indirilemedi';
-    res.status(500).json({ error: errorMessage });
+    if (!res.headersSent) {
+      res.status(500).json({ error: errorMessage });
+    }
   }
 });
 
@@ -364,35 +378,47 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
 
     console.log('YouTube işlem tamamlandı:', fileName);
 
-    // Return success response with download URL
-    res.json({ 
-      success: true, 
-      fileName, 
-      downloadUrl: `/api/download/${fileName}`,
-      message: 'Video başarıyla işlendi (En yüksek kalite)' 
-    });
-
-    // Create download endpoint for this file
+    // Create download endpoint for this file BEFORE sending response
     const currentTimestampDir = timestampDir; // Capture for closure
-    app.get(`/api/download/${fileName}`, (req: Request, res: Response) => {
-      if (!fs.existsSync(outputPath)) {
-        return res.status(404).json({ error: 'Dosya bulunamadı' });
-      }
-
-      res.download(outputPath, fileName, (err: Error | null) => {
-        if (err) {
-          console.error('Dosya gönderme hatası:', err);
+    const downloadRoute = `/api/download/${fileName}`;
+    
+    // Check if route already exists to avoid duplicate routes
+    if (!app._router || !app._router.stack.some((layer: any) => layer.route && layer.route.path === downloadRoute)) {
+      app.get(downloadRoute, (req: Request, res: Response) => {
+        // Add CORS headers for download
+        res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+        res.header('Access-Control-Allow-Credentials', 'true');
+        
+        if (!fs.existsSync(outputPath)) {
+          return res.status(404).json({ error: 'Dosya bulunamadı' });
         }
-        // Clean up after download
-        setTimeout(() => {
-          fs.rm(currentTimestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
-            if (rmErr) {
-              console.error('Dizin silme hatası:', rmErr);
-            }
-          });
-        }, 5000); // Wait 5 seconds before cleanup
+
+        res.download(outputPath, fileName, (err: Error | null) => {
+          if (err) {
+            console.error('Dosya gönderme hatası:', err);
+          }
+          // Clean up after download
+          setTimeout(() => {
+            fs.rm(currentTimestampDir, { recursive: true, force: true }, (rmErr: Error | null) => {
+              if (rmErr) {
+                console.error('Dizin silme hatası:', rmErr);
+              }
+            });
+          }, 5000); // Wait 5 seconds before cleanup
+        });
       });
-    });
+    }
+
+    // Return success response with download URL
+    if (!res.headersSent) {
+      res.json({ 
+        success: true, 
+        fileName, 
+        downloadUrl: downloadRoute,
+        directDownload: `https://downloaderapi.anitilky.xyz${downloadRoute}`,
+        message: 'Video başarıyla işlendi (En yüksek kalite)' 
+      });
+    }
 
   } catch (error) {
     console.error('YouTube indirme hatası:', error);
@@ -402,7 +428,9 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
     }
     
     const errorMessage = error instanceof Error ? error.message : 'Video indirilemedi';
-    res.status(500).json({ error: errorMessage });
+    if (!res.headersSent) {
+      res.status(500).json({ error: errorMessage });
+    }
   }
 });
 
