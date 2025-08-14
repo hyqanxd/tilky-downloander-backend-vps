@@ -125,16 +125,9 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
         noCheckCertificates: true,
         noWarnings: true,
         format: 'best[height<=1080]/best',
-        addHeaders: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          'Accept-Encoding': 'gzip, deflate',
-          'DNT': '1',
-          'Connection': 'keep-alive',
-          'Upgrade-Insecure-Requests': '1'
-        }
-      });
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        referer: 'https://www.instagram.com/'
+      } as any);
       
       if (tempInfo && typeof tempInfo === 'object') {
         const infoObj = tempInfo as any;
