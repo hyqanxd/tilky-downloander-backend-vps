@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import ffmpeg from 'ffmpeg-static';
 import axios from 'axios';
 import fluentFfmpeg from 'fluent-ffmpeg';
-import cors from 'cors'; // CORS paketini ekleyin
+import cors from 'cors';
 
 interface DownloadRequest {
   url: string;
@@ -24,16 +24,31 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS middleware'ini ekleyin
 app.use(cors({
-  origin: 'https://downloader.anitilky.xyz', // Frontend'inizin origin'i
-  methods: ['GET', 'POST', 'OPTIONS'], // İzin verilen metodlar
-  allowedHeaders: ['Content-Type'], // İzin verilen başlıklar
+  origin: 'https://downloader.anitilky.xyz',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
 }));
 
 app.use(express.json());
 
 // URL'nin hangi platformdan geldiğini kontrol eden fonksiyon
+function checkPlatform(url: string): 'instagram' | 'youtube' | 'unknown' {
+  if (!url || typeof url !== 'string') {
+    return 'unknown';
+  }
+  const lowercaseUrl = url.toLowerCase();
+  if (lowercaseUrl.includes('instagram.com')) {
+    return 'instagram';
+  } else if (
+    lowercaseUrl.includes('youtube.com') ||
+    lowercaseUrl.includes('youtu.be')
+  ) {
+    return 'youtube';
+  }
+  return 'unknown';
+}
+
 function generateFileName(extension: string): string {
   const randomNum = Math.floor(Math.random() * 1000000);
   return `tilky-${randomNum}.${extension}`;
@@ -47,7 +62,7 @@ app.post('/api/download/instagram', async (req: Request<{}, {}, DownloadRequest>
     const { url, format } = req.body;
 
     // Platform kontrolü
-    const platform = checkPlatform(url); // checkPlatform fonksiyonu tanımlı olmalı
+    const platform = checkPlatform(url);
     if (platform !== 'instagram') {
       return res.status(400).json({ error: 'Lütfen geçerli bir Instagram URL\'si girin' });
     }
@@ -148,7 +163,7 @@ app.post('/api/download/youtube', async (req: Request<{}, {}, DownloadRequest>, 
     const { url, format } = req.body;
 
     // Platform kontrolü
-    const platform = checkPlatform(url); // checkPlatform fonksiyonu tanımlı olmalı
+    const platform = checkPlatform(url);
     if (platform !== 'youtube') {
       return res.status(400).json({ error: 'Lütfen geçerli bir YouTube URL\'si girin' });
     }
